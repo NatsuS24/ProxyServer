@@ -1,6 +1,6 @@
 import os
 import socket
-from HeaderHandler import HeaderHandler
+from HeaderHandler import requesthandler
 from datetime import datetime
 
 class ProxyServer(object):
