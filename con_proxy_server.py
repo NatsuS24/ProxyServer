@@ -8,9 +8,10 @@ from datetime import datetime
 import time
 import random
 from chunkbuffer import ChunkBuffer
+from cache import Caching
 
 total_cache_size = 1000000
-cache_threshold = 2**15
+cache_threshold = 2**20
 
 class ProxyServer(asyncore.dispatcher):
 	def __init__(self):
@@ -23,11 +24,13 @@ class ProxyServer(asyncore.dispatcher):
 		self.address = self.socket.getsockname()
 		self.logger.debug('binding to %s'%(str(self.address)))
 		self.listen(1)
+		global total_cache_size
+		self.cacheTable = Caching(total_cache_size)
 
 	def handle_accept(self):
 		connSock, addr = self.accept()
 		self.logger.debug('accepting -> %s'%str(addr))
-		ClientHandler(connSock, addr) ## per user request
+		ClientHandler(connSock, addr, self.cacheTable) ## per user request
 
 	def handle_close(self):
 		self.logger.debug("closed")
@@ -37,7 +40,8 @@ class ProxyServer(asyncore.dispatcher):
 class ClientHandler(asyncore.dispatcher):
 	''' 
 	'''
-	def __init__(self, connSock, addr):
+	def __init__(self, connSock, addr, cacheTable):
+		self.cacheTable = cacheTable
 		self.connSock= connSock
 		self.address = addr
 		self.logger = logging.getLogger('[Client-%s'%str(addr))
@@ -53,7 +57,7 @@ class ClientHandler(asyncore.dispatcher):
 			(ip, port) = self.address
 			if (len(data)>0):
 				self.logger.debug(' REQUEST @ %s(%s):\n%s'%(str(ip),str(port),str(data)))
-				RequestAnalysisHandler(self.connSock, self.address, data) #per http request browser made
+				RequestAnalysisHandler(self.connSock, self.address, self.cacheTable, data) #per http request browser made
 		except:
 			pass
 	def handle_close(self):
@@ -63,13 +67,14 @@ class ClientHandler(asyncore.dispatcher):
 
 class RequestAnalysisHandler(asyncore.dispatcher):
 	''' anaylze header for each request before actual request'''
-	def __init__(self, clientSock, clientAddr, headerstring):
+	def __init__(self, clientSock, clientAddr, cacheTable, headerstring):
 		## buffering
+		self.cacheTable = cacheTable
 		self.currentChunkIndex = 0
 		self.totalContentLength=0
 		self.isDownloading = False
 		self.clientSock = clientSock
-		self.headerstring = headerstring
+		self.requeststring= headerstring
 		self.clientAddr = clientAddr
 		self.chunkTable = list()
 		(ip, port) = clientAddr
@@ -84,6 +89,7 @@ class RequestAnalysisHandler(asyncore.dispatcher):
 				self.connect((host, 80))
 		except:
 			self.close()
+
 	def handle_connect(self):
 		self.logger.debug("Sending HEAD request")
 		host=self.request.get_info("Host")
@@ -107,17 +113,16 @@ class RequestAnalysisHandler(asyncore.dispatcher):
 					global cache_threshold
 					if (contentLength>int(cache_threshold)):
 						self.perform_accelerated_request(contentLength)
-					else: self.perform_cached_request()
+					else: 
+						self.perform_cache_request(headerHandler)
 				else:
-					self.perform_cached_request()
+					self.perform_request()
 			else:
-				self.logger.debug("Could not Analyze header")
-				time.sleep(1)
+				self.logger.debug("No header returned.")
+				#self.perform_request()
+				#time.sleep(1)
 				self.close()
-		else:
-			'''client stream'''
-			pass
-
+		
 	def streamChunk(self):
 		''' stream all chunks to user once workers have finished downloading. Called by worker. '''
 		isDone = True
@@ -156,18 +161,42 @@ class RequestAnalysisHandler(asyncore.dispatcher):
 			chunkTuple = (self.chunkTable, chunkIndex)
 			self.logger.debug('---->> (%s, %s)'%(cur_length, contentLength))
 			if (contentLength-cur_length< del_length):
-				RequestAcceleratedHandler(self.clientSock, self.clientAddr, self.headerstring, rangeLength, chunkTuple, self, isLastTime=True)
+				RequestAcceleratedHandler(self.clientSock, self.clientAddr, self.requeststring, rangeLength, chunkTuple, self, isLastTime=True)
 				break
 			elif (cur_length==0):
-				RequestAcceleratedHandler(self.clientSock, self.clientAddr, self.headerstring, rangeLength, chunkTuple, self, isFirstTime=True)
+				RequestAcceleratedHandler(self.clientSock, self.clientAddr, self.requeststring, rangeLength, chunkTuple, self, isFirstTime=True)
 			else:
-				RequestAcceleratedHandler(self.clientSock, self.clientAddr, self.headerstring, rangeLength, chunkTuple, self)
+				RequestAcceleratedHandler(self.clientSock, self.clientAddr, self.requeststring, rangeLength, chunkTuple, self)
 			cur_length+=del_length+1
 			chunkIndex+=1
 			
-	def perform_cached_request(self):
+	def perform_request(self):
 		self.logger.debug("Initiating cached mode")
-		RequestHandler(self.clientSock, self.clientAddr, self.headerstring)
+		RequestHandler(self.clientSock, self.clientAddr, self.requeststring)
+
+	def perform_cache_request(self, headerHandler):
+		_LAST_MOD ='Last-Modified' 
+		cacheKey = str()
+		self.logger.debug("=== %s"%str(headerHandler))
+		if (_LAST_MOD in headerHandler):
+			lastMod = headerHandler.get_info(_LAST_MOD)
+			self.logger.debug(lastMod)
+			cacheKey = lastMod
+
+		if (cacheKey in self.cacheTable):
+			self.logger.debug("Sending from Cache: %s"%(str(cacheKey)))
+
+			data = self.cacheTable.getContent(cacheKey)
+			dataLength = len(data)
+			while(dataLength>0):
+				dataLength = self.clientSock.send(data)
+				self.logger.debug(dataLength)
+				data = data[dataLength:]
+		else:
+			totalLength = int(headerHandler.get_info('Content-Length'))
+			RequestCacheHandler(self.clientSock, self.clientAddr, self.requeststring, self.cacheTable, cacheKey)
+
+
 
 class RequestHandler(asyncore.dispatcher):
 	def __init__(self, clientSock, clientAddr, headerstring):
@@ -179,7 +208,6 @@ class RequestHandler(asyncore.dispatcher):
 		self.logger = logging.getLogger('[RequestHandler-%s]'%(port))
 		self.request = requesthandler.RequestHandler(headerstring)
 		try:
-
 			host = self.request.get_info("Host")
 			self.connect((host, 80))
 		except:
@@ -195,6 +223,55 @@ class RequestHandler(asyncore.dispatcher):
 			self.logger.debug("reading from socket")
 			data = self.recv(2048)
 			self.clientSock.send(data)
+		except(KeyboardInterrupt):
+			self.logger.debug("exception caught. Done downloading")
+			self.close()
+
+class RequestCacheHandler(asyncore.dispatcher):
+	def __init__(self, clientSock, clientAddr, headerstring, cacheTable, cacheKey):
+		self.contentLength = 0
+		self.cacheTable= cacheTable
+		self.cacheKey = cacheKey
+		self.clientSock = clientSock
+		self.data=str()
+		self.isDoneCaching = False
+		self.headerstring = headerstring
+		asyncore.dispatcher.__init__(self)
+		self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
+		(ip, port) = clientAddr
+		self.logger = logging.getLogger('[RequestCacheHandler-%s]'%(port))
+		self.request = requesthandler.RequestHandler(headerstring)
+		self.logger.debug("Caching")
+		try:
+			host = self.request.get_info("Host")
+			self.connect((host, 80))
+		except:
+			self.close()
+
+	def handle_connect(self):
+		self.logger.debug("Connected. Sending request.")
+		self.send(self.headerstring)
+
+	def handle_read(self):
+		self.logger.debug("Host sending data")
+		try:
+			self.logger.debug("reading from socket")
+			data = self.recv(2048)
+			self.clientSock.send(data)
+			self.data += data
+			self.logger.debug(len(self.data))
+			self.logger.debug(self.contentLength)
+			if (HeaderHandler.get_headerpad() in data):
+				headerstring = data.split(HeaderHandler.get_headerpad())[0]+HeaderHandler.get_headerpad()
+				self.logger.debug(headerstring)
+				headerHandler = HeaderHandler(headerstring)
+				self.contentLength = int(headerHandler.get_info('Content-Length')) + len(headerstring)
+
+			if (len(self.data)>= self.contentLength and not(self.isDoneCaching)):
+				#self.cacheTable.update(self.cacheKey, self.data)
+				self.isDoneCaching = True
+				self.close()
+
 		except(KeyboardInterrupt):
 			self.logger.debug("exception caught. Done downloading")
 			self.close()
