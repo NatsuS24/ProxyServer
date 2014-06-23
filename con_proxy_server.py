@@ -114,6 +114,7 @@ class RequestAnalysisHandler(asyncore.dispatcher):
 					if (contentLength>int(cache_threshold)):
 						self.perform_accelerated_request(contentLength)
 					else: 
+						### Perform cache download
 						self.perform_cache_request(headerHandler)
 				else:
 					self.perform_request()
@@ -134,7 +135,7 @@ class RequestAnalysisHandler(asyncore.dispatcher):
 			for chunkBuf in self.chunkTable:
 				bufString = chunkBuf.getBuffer()
 
-				self.logger.debug("\n===============================\n%r\n"%str(bufString))
+				#self.logger.debug("\n===============================\n%r\n"%str(bufString))
 				#self.clientSock.send(bufString)
 				lengthSent = len(bufString)
 				while(lengthSent>0):
@@ -175,13 +176,13 @@ class RequestAnalysisHandler(asyncore.dispatcher):
 		RequestHandler(self.clientSock, self.clientAddr, self.requeststring)
 
 	def perform_cache_request(self, headerHandler):
-		_LAST_MOD ='Last-Modified' 
+		''' Caching here'''
+		_ETAG ='ETag' 
 		cacheKey = str()
 		self.logger.debug("=== %s"%str(headerHandler))
-		if (_LAST_MOD in headerHandler):
-			lastMod = headerHandler.get_info(_LAST_MOD)
-			self.logger.debug(lastMod)
-			cacheKey = lastMod
+		if (_ETAG in headerHandler):
+			cacheKey = headerHandler.get_info(_ETAG)
+			self.logger.debug(cacheKey)
 
 		if (cacheKey in self.cacheTable):
 			self.logger.debug("Sending from Cache: %s"%(str(cacheKey)))
@@ -194,9 +195,8 @@ class RequestAnalysisHandler(asyncore.dispatcher):
 				data = data[dataLength:]
 		else:
 			totalLength = int(headerHandler.get_info('Content-Length'))
+			## downloading with caching
 			RequestCacheHandler(self.clientSock, self.clientAddr, self.requeststring, self.cacheTable, cacheKey)
-
-
 
 class RequestHandler(asyncore.dispatcher):
 	def __init__(self, clientSock, clientAddr, headerstring):
@@ -228,6 +228,7 @@ class RequestHandler(asyncore.dispatcher):
 			self.close()
 
 class RequestCacheHandler(asyncore.dispatcher):
+	''' Caching Dispatcher here'''
 	def __init__(self, clientSock, clientAddr, headerstring, cacheTable, cacheKey):
 		self.contentLength = 0
 		self.cacheTable= cacheTable
@@ -257,20 +258,25 @@ class RequestCacheHandler(asyncore.dispatcher):
 		try:
 			self.logger.debug("reading from socket")
 			data = self.recv(2048)
-			self.clientSock.send(data)
+			self.clientSock.send(data) ##pass to client
 			self.data += data
 			self.logger.debug(len(self.data))
 			self.logger.debug(self.contentLength)
-			if (HeaderHandler.get_headerpad() in data):
+			if (HeaderHandler.get_headerpad() in data): ##HeaderHandeler.get_headerpad()-->\r\n\r\n
 				headerstring = data.split(HeaderHandler.get_headerpad())[0]+HeaderHandler.get_headerpad()
 				self.logger.debug(headerstring)
 				headerHandler = HeaderHandler(headerstring)
-				self.contentLength = int(headerHandler.get_info('Content-Length')) + len(headerstring)
+				if (headerHandler.get_info('Content-Length')!=None):
+					self.contentLength = int(headerHandler.get_info('Content-Length')) + len(headerstring)
+				else: 
+					global total_cache_size
+					self.contentLength = total_cache_size
 
 			if (len(self.data)>= self.contentLength and not(self.isDoneCaching)):
-				#self.cacheTable.update(self.cacheKey, self.data)
+				print("updated")
+				self.cacheTable.update(self.cacheKey, self.data)
 				self.isDoneCaching = True
-				self.close()
+				
 
 		except(KeyboardInterrupt):
 			self.logger.debug("exception caught. Done downloading")
@@ -329,7 +335,7 @@ class RequestAcceleratedHandler(asyncore.dispatcher):
 			if (sz>=self.master.totalContentLength):
 				self.master.streamChunk()
 
-			self.close()
+			#self.close()
 
 	def handle_read(self):	
 		try:

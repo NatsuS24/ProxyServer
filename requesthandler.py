@@ -141,13 +141,8 @@ if (__name__=='__main__'):
 	host = 'www.w3.org'
 	header = 'HTTP/1.1 200 OK\r\nHost: %s\r\nAccept: */*\r\nConnection: keep-alive\r\nContent-Length: 0'%(host)
 	h = HeaderHandler(header)
-	print(h.get_request())
-	h.update('ADUH', 'ernaaa')
-	print("\n")
-	print(h)
-	h.remove('ADUH')
-	print("\n")
-	print(h)
+	h.update('FieldNew', "Content")
+	print(h.get_info('Etag'))
 
 		
 
