@@ -136,14 +136,14 @@ class RequestAnalysisHandler(asyncore.dispatcher):
 				bufString = chunkBuf.getBuffer()
 
 				##self.logger.debug("\n===============================\n%r\n"%str(bufString))
-				time.sleep(0.1)
+				time.sleep(0.5)
 				#self.clientSock.send(bufString)
 				lengthSent = len(bufString)
 				while(lengthSent>0):
 					lengthSent = self.clientSock.send(bufString)
 					bufString = bufString[lengthSent:]
 			del self.chunkTable
-			##self.handle_close()
+			self.handle_close()
 
 	def streamWithBuffering(self):
 		pass
