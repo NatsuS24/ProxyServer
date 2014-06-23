@@ -10,7 +10,7 @@ import random
 from chunkbuffer import ChunkBuffer
 from cache import Caching
 
-total_cache_size = 1000000
+total_cache_size = 100000
 cache_threshold = 2**20
 
 class ProxyServer(asyncore.dispatcher):
@@ -135,14 +135,15 @@ class RequestAnalysisHandler(asyncore.dispatcher):
 			for chunkBuf in self.chunkTable:
 				bufString = chunkBuf.getBuffer()
 
-				#self.logger.debug("\n===============================\n%r\n"%str(bufString))
+				##self.logger.debug("\n===============================\n%r\n"%str(bufString))
+				time.sleep(0.1)
 				#self.clientSock.send(bufString)
 				lengthSent = len(bufString)
 				while(lengthSent>0):
 					lengthSent = self.clientSock.send(bufString)
 					bufString = bufString[lengthSent:]
 			del self.chunkTable
-			self.handle_close()
+			##self.handle_close()
 
 	def streamWithBuffering(self):
 		pass
